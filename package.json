@@ -1,0 +1,10 @@
+{
+  "name": "egret-importer",
+  "version": "0.1.0",
+  "description": "Egret Project Importer",
+  "author": "rainbowmhk@qq.com",
+  "packages": {
+    "project-importer": "^0.1.0"
+  },
+  "main": "main.js"
+}
