@@ -373,16 +373,14 @@ function _genAnimFile(animFile) {
 
     var animFolderPath = Path.join(tempResPath, relativeDir, name + ACTION_FOLDER_SUFFIX);
     var animCfg = JSON.parse(Fs.readFileSync(animFile, 'utf8'));
-    if (!Fs.existsSync(animFolderPath)) {
-        Fs.mkdirsSync(animFolderPath);
-    }
 
     // create animation clip files
     var importedUrls = [];
     for (var animName in animCfg.mc) {
         var animInfo = animCfg.mc[animName];
         var framesInfo = animInfo.frames;
-        if (!framesInfo || framesInfo.length === 0) {
+        // if there only 1 frame, it's not necessary to generate animation
+        if (!framesInfo || framesInfo.length <= 1) {
             continue;
         }
 
@@ -424,9 +422,13 @@ function _genAnimFile(animFile) {
         var animClip = new cc.AnimationClip();
         animClip.sample = animInfo.frameRate;
         animClip._name = animName;
-        animClip._duration = oneFrameDuration * animInfo.frames.length;
+        animClip._duration = oneFrameDuration * (animInfo.frames.length - 1);
         animClip.curveData = curveData;
         var animClipStr = Editor.serialize(animClip);
+
+        if (!Fs.existsSync(animFolderPath)) {
+            Fs.mkdirsSync(animFolderPath);
+        }
         Fs.writeFileSync(animFilePath, animClipStr);
 
         importedUrls.push(Url.join(newResourceUrl, relativeDir, name + ACTION_FOLDER_SUFFIX, animName + '.anim'));
@@ -466,10 +468,11 @@ function _genAnimPrefab(animFile, animUrls) {
             animClip._name = Url.basenameNoExt(clipUrl);
             animateComponent.addClip(animClip);
 
-            if (0 === i) {
-                animateComponent.defaultClip = animClip;
-                animateComponent.playOnLoad = true;
-            }
+            // set the default animation clip
+            //if (0 === i) {
+            //    animateComponent.defaultClip = animClip;
+            //    animateComponent.playOnLoad = true;
+            //}
         }
     }
 
