@@ -205,7 +205,7 @@ function _createPrefabFromFile(exmlPath, prefabPath, cb) {
     var rootNodeInfo = childNodes[0];
     var nsMap = rootNodeInfo._nsMap;
 
-    _createNodeGraph(rootNodeInfo, widgetName, nsMap, function(theNode) {
+    _createNodeGraph(null, rootNodeInfo, widgetName, nsMap, function(theNode) {
         var prefab = _Scene.PrefabUtils.createPrefabFrom(theNode);
         var prefabData = Editor.serialize(prefab);
         var targetFolder = Path.dirname(prefabPath);
@@ -217,7 +217,7 @@ function _createPrefabFromFile(exmlPath, prefabPath, cb) {
     });
 }
 
-function _createNodeGraph(nodeInfo, widgetName, nsMap, cb) {
+function _createNodeGraph(parentNode, nodeInfo, widgetName, nsMap, cb) {
     var localName = nodeInfo.localName;
     var node = null;
     var skinKey = _getSkinKey(localName, nodeInfo.prefix, nsMap);
@@ -260,6 +260,10 @@ function _createNodeGraph(nodeInfo, widgetName, nsMap, cb) {
             }
         },
         function(next) {
+            if (parentNode) {
+                parentNode.addChild(node);
+            }
+
             // init the base node info
             _initBaseNodeInfo(node, nodeInfo);
 
@@ -284,8 +288,7 @@ function _createNodeGraph(nodeInfo, widgetName, nsMap, cb) {
                         callback();
                     } else {
                         // create child node
-                        _createNodeGraph(childInfo, null, nsMap, function(childNode) {
-                            node.addChild(childNode);
+                        _createNodeGraph(node, childInfo, null, nsMap, function(childNode) {
                             index++;
                             callback();
                         });
@@ -361,7 +364,14 @@ function _initBaseNodeInfo(node, nodeInfo) {
     var y = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'y', 0);
     var anchorOffsetX = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'anchorOffsetX', 0);
     var anchorOffsetY = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'anchorOffsetY', 0);
-    node.setPosition(cc.p(x - anchorOffsetX, parentSize.height - y + anchorOffsetY));
+    node.setPosition(cc.p(x - anchorOffsetX, anchorOffsetY - y));
+
+    // alpha
+    var alpha = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'alpha', 1);
+    if (alpha > 1) {
+        alpha = 1;
+    }
+    node.setOpacity(alpha * 255);
 }
 
 function _getNodeName(nodeInfo, widgetName) {
@@ -424,6 +434,60 @@ function _importImage(node, nodeInfo, cb) {
 }
 
 function _importLabel(node, nodeInfo, cb) {
+    var label = node.addComponent(cc.Label);
+    label.string = XmlUtils.getPropertyOfNode(nodeInfo, 'text', '');
+    label.lineHeight = 0;
+
+    // color
+    var color = XmlUtils.getPropertyOfNode(nodeInfo, 'textColor', '');
+    if (color) {
+        color = color.replace('0x', '#');
+        node.setColor(cc.hexToColor(color));
+    }
+
+    // font size
+    label._fontSize = XmlUtils.getIntPropertyOfNode(nodeInfo, 'size', 30);
+
+    // alignment
+    var hAlign = XmlUtils.getPropertyOfNode(nodeInfo, 'textAlign', 'left');
+    var vAlign = XmlUtils.getPropertyOfNode(nodeInfo, 'verticalAlign', 'top');
+    switch(hAlign) {
+        case 'left':
+        default:
+            label.horizontalAlign = cc.Label.HorizontalAlign.LEFT;
+            break;
+        case 'center':
+            label.horizontalAlign = cc.Label.HorizontalAlign.CENTER;
+            break;
+        case 'right':
+            label.horizontalAlign = cc.Label.HorizontalAlign.RIGHT;
+            break;
+    }
+
+    switch(vAlign) {
+        case 'justify':
+        case 'top':
+        default:
+            label.verticalAlign = cc.Label.VerticalAlign.TOP;
+            break;
+        case 'middle':
+            label.verticalAlign = cc.Label.VerticalAlign.CENTER;
+            break;
+        case 'bottom':
+            label.verticalAlign = cc.Label.VerticalAlign.BOTTOM;
+            break;
+    }
+
+    // overflow mode
+    var width = XmlUtils.getPropertyInOrder(nodeInfo, [ 'width', 'minWidth', 'maxWidth' ], '');
+    var height = XmlUtils.getPropertyInOrder(nodeInfo, [ 'height', 'minHeight', 'maxHeight' ], '');
+    if (! width && ! height) {
+        label.overflow = cc.Label.Overflow.NONE;
+    } else {
+        label.overflow = cc.Label.Overflow.CLAMP;
+        label._useOriginalSize = false;
+    }
+
     cb();
 }
 
