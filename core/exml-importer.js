@@ -8,6 +8,9 @@ const DOMParser = require('xmldom').DOMParser;
 const XmlUtils = require('./xml-utils');
 
 const WidgetImporters = {
+    'Image': _importImage,
+    'Label' : _importLabel,
+    'BitmapLabel' : _importLabel,
     'Button' : _importButton
 };
 
@@ -63,7 +66,7 @@ function importExmlFiles(exmlFiles, resInfo, srcResPath, tempResPath, targetRoot
 function _getResUuidByName(resName) {
     var resPath = ResInfo[resName];
     if (!resPath || resPath.length === 0) {
-        return null;
+        resPath = resName;
     }
 
     var resUrl = Url.join(RootUrl, resPath);
@@ -160,24 +163,40 @@ function _createNodeGraph(nodeInfo, widgetName, nsMap, cb) {
     var localName = nodeInfo.localName;
     var node = null;
     var skinKey = _getSkinKey(localName, nodeInfo.prefix, nsMap);
+    var skinNameNode = XmlUtils.getFirstChildNodeByLocalName(nodeInfo, 'skinName');
+    var widgetKey = widgetName;
+    var nodeName = _getNodeName(nodeInfo, widgetName);
     Async.waterfall([
         function(next) {
             // create the node from different way
             if (widgetName) {
                 // it's a root node of skin file, create a node as the rootNode
-                node = new cc.Node(localName);
+                node = new cc.Node(nodeName);
                 next();
             } else {
-                if (skinKey && SkinsInfo[skinKey]) {
+                if (skinNameNode) {
+                    node = new cc.Node(nodeName);
+                    next();
+                }
+                else if (skinKey && SkinsInfo[skinKey]) {
                     // it's a node using skin, create a node from the skin prefab
                     _importExml(SkinsInfo[skinKey], function(prefabUrl) {
-                        // TODO create the node from the skin prefab
-                        node = new cc.Node(localName);
-                        next();
+                        // create the node from the skin prefab
+                        var uuid = Editor.assetdb.remote.urlToUuid(prefabUrl);
+                        cc.AssetLibrary.loadAsset(uuid, function (err, prefab) {
+                            if (err) {
+                                node = new cc.Node(nodeName);
+                                next();
+                            } else {
+                                node = cc.instantiate(prefab);
+                                node.setName(nodeName);
+                                next();
+                            }
+                        });
                     });
                 } else {
                     // It's a normal node, create it directly
-                    node = new cc.Node(localName);
+                    node = new cc.Node(nodeName);
                     next();
                 }
             }
@@ -186,29 +205,22 @@ function _createNodeGraph(nodeInfo, widgetName, nsMap, cb) {
             // init the base node info
             _initBaseNodeInfo(node, nodeInfo);
 
-            // init the widget info for the node
-            if (!widgetName) {
-                widgetName = _getWidgetName(skinKey);
-            }
-
-            var widgetImporter = WidgetImporters[widgetName];
-            if (widgetImporter) {
-                widgetImporter(node, nodeInfo);
-            }
-
-            next();
-        },
-        function(next) {
             // create children
-            var children = XmlUtils.getAllChildren(nodeInfo);
+            var children = null;
+            if (skinNameNode) {
+                var skinNode = XmlUtils.getFirstChildNodeByLocalName(skinNameNode, 'Skin');
+                children = XmlUtils.getAllChildren(skinNode);
+            } else {
+                children = XmlUtils.getAllChildren(nodeInfo);
+            }
             var index = 0;
             Async.whilst(function() {
                     return index < children.length;
                 },
                 function(callback) {
                     var childInfo = children[index];
-                    var checker = ChildCheckers[widgetName];
-                    if (checker && !checker(childInfo)) {
+                    var checker = ChildCheckers[widgetKey];
+                    if (!widgetName && checker && !checker(childInfo)) {
                         // not a valid child
                         index++;
                         callback();
@@ -221,23 +233,106 @@ function _createNodeGraph(nodeInfo, widgetName, nsMap, cb) {
                         });
                     }
                 },
-                function() {
-                    next();
-                }
+                next
             );
+        },
+        function(next) {
+            // init the widget info for the node
+            if (!widgetKey) {
+                widgetKey = _getWidgetName(skinKey);
+            }
+
+            var widgetImporter = WidgetImporters[widgetKey];
+            if (widgetImporter) {
+                widgetImporter(node, nodeInfo, next);
+            } else {
+                next();
+            }
         }
     ], function() {
         cb(node);
     });
 }
 
-function _initBaseNodeInfo(node, nodeInfo) {
+function _getPercentValue(theValue) {
+    if (theValue.indexOf('%') >= 0) {
+        var percent = parseFloat(theValue);
+        return percent / 100;
+    }
 
+    return -1;
+}
+
+function _initBaseNodeInfo(node, nodeInfo) {
+    // get the parent
+    var parent = node.getParent();
+    var parentSize = cc.size(0, 0);
+    if (parent) {
+        parentSize = parent.getContentSize();
+    }
+
+    // init the width & height
+    var width = XmlUtils.getPropertyInOrder(nodeInfo, [ 'width', 'minWidth', 'maxWidth' ], '');
+    var height = XmlUtils.getPropertyInOrder(nodeInfo, [ 'height', 'minHeight', 'maxHeight' ], '');
+    var widthPercent = _getPercentValue(width);
+    var heightPercent = _getPercentValue(height);
+
+    var nodeSize = cc.size(0, 0);
+    if (width) {
+        if (widthPercent >= 0) {
+            nodeSize.width = parentSize.width * widthPercent;
+        } else {
+            nodeSize.width = parseFloat(width);
+        }
+    }
+
+    if (height) {
+        if (heightPercent >= 0) {
+            nodeSize.height = parentSize.height * heightPercent;
+        } else {
+            nodeSize.height = parseFloat(height);
+        }
+    }
+    node.setContentSize(nodeSize);
+
+    // init the anchor point
+    node.setAnchorPoint(cc.p(0, 1));
+
+    // init the position
+    var x = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'x', 0);
+    var y = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'y', 0);
+    var anchorOffsetX = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'anchorOffsetX', 0);
+    var anchorOffsetY = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'anchorOffsetY', 0);
+    node.setPosition(cc.p(x - anchorOffsetX, parentSize.height - y + anchorOffsetY));
+}
+
+function _getNodeName(nodeInfo, widgetName) {
+    var id = XmlUtils.getPropertyOfNode(nodeInfo, 'id', '');
+    if (id)
+        return id;
+
+    var name = XmlUtils.getPropertyOfNode(nodeInfo, 'name', '');
+    if (name)
+        return name;
+
+    if (widgetName)
+        return widgetName;
+
+    return nodeInfo.localName;
 }
 
 // importer for widgets
-function _importButton() {
+function _importImage(node, nodeInfo, cb) {
+    var sprite = node.addComponent(cc.Sprite);
+    cb();
+}
 
+function _importLabel(node, nodeInfo, cb) {
+    cb();
+}
+
+function _importButton(node, nodeInfo, cb) {
+    cb();
 }
 
 // methods for checking valid children
