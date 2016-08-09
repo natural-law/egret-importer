@@ -63,19 +63,38 @@ function importExmlFiles(exmlFiles, resInfo, srcResPath, tempResPath, targetRoot
     );
 }
 
-function _getResUuidByName(resName) {
+function _getResUuidByName(resName, isSpFrame) {
+    if (!resName) {
+        return null;
+    }
+
     var resPath = ResInfo[resName];
     if (!resPath || resPath.length === 0) {
         resPath = resName;
     }
 
     var resUrl = Url.join(RootUrl, resPath);
+    if (isSpFrame) {
+        var frameKey = Path.basename(resPath, Path.extname(resPath));
+        resUrl = Url.join(resUrl, frameKey);
+    }
+
     var uuid = Editor.assetdb.remote.urlToUuid(resUrl);
     if (Editor.assetdb.remote.existsByUuid(uuid)) {
         return uuid;
     }
 
     return null;
+}
+
+function _getSpriteFrame(uuid) {
+    if (!uuid) {
+        return null;
+    }
+
+    var frame = new cc.SpriteFrame();
+    frame._uuid = uuid;
+    return frame;
 }
 
 function _getSkinKey(localName, prefix, nsMap) {
@@ -99,6 +118,45 @@ function _getWidgetName(skinKey) {
 
     var dotIdx = skinKey.lastIndexOf('.');
     return skinKey.slice(dotIdx + 1);
+}
+
+function _setScale9Properties(scale9Grid, uuid, cb) {
+    if (!scale9Grid) {
+        cb();
+        return;
+    }
+
+    Editor.assetdb.queryMetaInfoByUuid(uuid, function(err,info) {
+        if (!info) {
+            cb();
+            return;
+        }
+
+        // modify the meta info
+        var meta = JSON.parse(info.json);
+
+        var data = scale9Grid.split(',');
+        var dataLeft = parseInt(data[0]);
+        var dataTop = parseInt(data[1]);
+        var dataWidth = parseInt(data[2]);
+        var dataHeight = parseInt(data[3]);
+
+        meta.trimThreshold = -1;
+        meta.borderTop = dataTop;
+        meta.borderBottom = meta.rawHeight - dataTop - dataHeight;
+        if (meta.borderBottom < 0) {
+            meta.borderBottom = 0;
+        }
+        meta.borderLeft = dataLeft;
+        meta.borderRight = meta.rawWidth - dataLeft - dataWidth;
+        if (meta.borderRight < 0) {
+            meta.borderRight = 0;
+        }
+
+        var jsonString = JSON.stringify(meta);
+        Editor.assetdb.saveMeta( uuid, jsonString );
+        cb();
+    });
 }
 
 function _importExml(exmlPath, cb) {
@@ -324,7 +382,45 @@ function _getNodeName(nodeInfo, widgetName) {
 // importer for widgets
 function _importImage(node, nodeInfo, cb) {
     var sprite = node.addComponent(cc.Sprite);
-    cb();
+    var sourceProp = XmlUtils.getPropertyOfNode(nodeInfo, 'source', '');
+    var uuid = _getResUuidByName(sourceProp, true);
+    if (uuid) {
+        sprite.spriteFrame = _getSpriteFrame(uuid);
+    }
+
+    // get the size config
+    var width = XmlUtils.getPropertyInOrder(nodeInfo, [ 'width', 'minWidth', 'maxWidth' ], '');
+    var height = XmlUtils.getPropertyInOrder(nodeInfo, [ 'height', 'minHeight', 'maxHeight' ], '');
+    if (! width && ! height) {
+        sprite.sizeMode = cc.Sprite.SizeMode.RAW;
+    } else {
+        sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
+    }
+
+    var scale9Grid = XmlUtils.getPropertyOfNode(nodeInfo, 'scale9Grid', '');
+    if (scale9Grid) {
+        sprite.type = cc.Sprite.Type.SLICED;
+        if (uuid) {
+            _setScale9Properties(scale9Grid, uuid, cb);
+        } else {
+            cb();
+        }
+    } else {
+        var fillMode = XmlUtils.getPropertyOfNode(nodeInfo, 'fillMode', 'scale');
+        switch(fillMode) {
+            case 'repeat':
+                sprite.type = cc.Sprite.Type.TILED;
+                break;
+            case 'clip':
+                // TODO sprite in Creator not support this effect
+                // treat it as default
+            case 'scale':
+            default:
+                sprite.type = cc.Sprite.Type.SIMPLE;
+                break;
+        }
+        cb();
+    }
 }
 
 function _importLabel(node, nodeInfo, cb) {
