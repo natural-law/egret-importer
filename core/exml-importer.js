@@ -10,7 +10,7 @@ const XmlUtils = require('./xml-utils');
 const WidgetImporters = {
     'Image': _importImage,
     'Label' : _importLabel,
-    'BitmapLabel' : _importLabel,
+    'BitmapLabel' : _importBitmapLabel,
     'Button' : _importButton
 };
 
@@ -372,6 +372,15 @@ function _initBaseNodeInfo(node, nodeInfo) {
         alpha = 1;
     }
     node.setOpacity(alpha * 255);
+
+    // scale
+    var scaleX = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'scaleX', 1);
+    var scaleY = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'scaleY', 1);
+    node.setScaleX(scaleX);
+    node.setScaleY(scaleY);
+
+    // visible
+    node.active = XmlUtils.getBoolPropertyOfNode(nodeInfo, 'visible', true);
 }
 
 function _getNodeName(nodeInfo, widgetName) {
@@ -489,6 +498,51 @@ function _importLabel(node, nodeInfo, cb) {
     }
 
     cb();
+}
+
+function _importBitmapLabel(node, nodeInfo, cb) {
+    var label = node.addComponent(cc.Label);
+    label.string = XmlUtils.getPropertyOfNode(nodeInfo, 'text', '');
+    label.lineHeight = 0;
+
+    // overflow mode
+    var width = XmlUtils.getPropertyInOrder(nodeInfo, [ 'width', 'minWidth', 'maxWidth' ], '');
+    var height = XmlUtils.getPropertyInOrder(nodeInfo, [ 'height', 'minHeight', 'maxHeight' ], '');
+    if (! width && ! height) {
+        label.overflow = cc.Label.Overflow.NONE;
+    } else {
+        label.overflow = cc.Label.Overflow.CLAMP;
+        label._useOriginalSize = false;
+    }
+
+    var fntUuid = _getResUuidByName(XmlUtils.getPropertyOfNode(nodeInfo, 'font', ''));
+    if (fntUuid) {
+        Async.waterfall([
+            next => {
+                cc.AssetLibrary.loadAsset(fntUuid, function(err, res) {
+                    if (err) {
+                        return next();
+                    }
+                    label.font = res;
+                    next();
+                });
+            },
+            next => {
+                var fntFile = Editor.assetdb.remote.uuidToFspath(fntUuid);
+                cc.loader.load(fntFile, function(err, config) {
+                    if (err) {
+                        return next();
+                    }
+
+                    label._fontSize = config.fontSize;
+                    label.lineHeight = config.commonHeight;
+                    next();
+                });
+            }
+        ], cb);
+    } else {
+        cb();
+    }
 }
 
 function _importButton(node, nodeInfo, cb) {

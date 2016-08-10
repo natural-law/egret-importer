@@ -256,7 +256,8 @@ function _handleFntFile(absPath, targetPath) {
             fSize = Math.max(fSize, frameCfg.w);
             lineHeight = Math.max(lineHeight, frameCfg.h);
             var charCode = frame.charCodeAt(0);
-            var charLine = `char id=${charCode} x=${frameCfg.x} y=${frameCfg.y} width=${frameCfg.w} height=${frameCfg.h} xoffset=${frameCfg.offX} yoffset=${frameCfg.offY} xadvance=0 page=0 chnl=0`;
+            var xadvance = frame.xadvance || frameCfg.sourceW || frameCfg.w;
+            var charLine = `char id=${charCode} x=${frameCfg.x} y=${frameCfg.y} width=${frameCfg.w} height=${frameCfg.h} xoffset=${frameCfg.offX} yoffset=${frameCfg.offY} xadvance=${xadvance} page=0 chnl=0`;
             charList.push(charLine);
         }
 
