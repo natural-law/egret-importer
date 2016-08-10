@@ -11,7 +11,10 @@ const WidgetImporters = {
     'Image': _importImage,
     'Label' : _importLabel,
     'BitmapLabel' : _importBitmapLabel,
-    'Button' : _importButton
+    'Button' : _importButton,
+    'HScrollBar' : _importHScrollBar,
+    'VScrollBar' : _importVScrollBar,
+    'ProgressBar' : _importProgressBar,
 };
 
 const ChildCheckers = {
@@ -224,6 +227,7 @@ function _createNodeGraph(parentNode, nodeInfo, widgetName, nsMap, cb) {
     var skinNameNode = XmlUtils.getFirstChildNodeByLocalName(nodeInfo, 'skinName');
     var widgetKey = widgetName;
     var nodeName = _getNodeName(nodeInfo, widgetName);
+    var usingSkin = false;
     Async.waterfall([
         function(next) {
             // create the node from different way
@@ -248,6 +252,7 @@ function _createNodeGraph(parentNode, nodeInfo, widgetName, nsMap, cb) {
                             } else {
                                 node = cc.instantiate(prefab);
                                 node.setName(nodeName);
+                                usingSkin = true;
                                 next();
                             }
                         });
@@ -265,7 +270,7 @@ function _createNodeGraph(parentNode, nodeInfo, widgetName, nsMap, cb) {
             }
 
             // init the base node info
-            _initBaseNodeInfo(node, nodeInfo);
+            _initBaseNodeInfo(node, nodeInfo, usingSkin);
 
             // create children
             var children = null;
@@ -324,7 +329,99 @@ function _getPercentValue(theValue) {
     return -1;
 }
 
-function _initBaseNodeInfo(node, nodeInfo) {
+function _addWidget(node, nodeInfo, widthPercent, heightPercent) {
+    var left = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'left', null);
+    var right = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'right', null);
+    var top = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'top', null);
+    var bottom = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'bottom', null);
+    var horizontalCenter = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'horizontalCenter', null);
+    var verticalCenter = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'verticalCenter', null);
+
+    if (left === null && right === null && top === null && bottom === null &&
+        horizontalCenter === null && verticalCenter === null &&
+        widthPercent < 0 && heightPercent < 0) {
+        // don't need add widget component
+        return;
+    }
+
+    var widget = _tryAddComponent(node, cc.Widget);
+    if (!widget) {
+        return;
+    }
+
+    var parent = node.getParent();
+    var parentSize = cc.size(0, 0);
+    if (parent) {
+        parentSize = parent.getContentSize();
+    }
+    if (widthPercent > 0 && parent) {
+        widget.isAlignLeft = true;
+        widget.isAlignRight = true;
+        if (left !== null && right === null) {
+            widget.left = left;
+            widget.right = parentSize.width * (1 - widthPercent) - left;
+        }
+        else if (right !== null && left === null) {
+            widget.left = parentSize.width * (1 - widthPercent) - right;
+            widget.right = right;
+        }
+        else if (right === null && left === null) {
+            widget.left = parentSize.width * (1 - widthPercent) / 2;
+            widget.right = widget.left;
+        } else {
+            widget.left = left;
+            widget.right = right;
+        }
+    }
+    else if (horizontalCenter === 0) {
+        widget.isAlignHorizontalCenter = true;
+    } else {
+        if (left !== null) {
+            widget.isAlignLeft = true;
+            widget.left = left;
+        }
+
+        if (right !== null) {
+            widget.isAlignRight = true;
+            widget.right = right;
+        }
+    }
+
+    if (heightPercent > 0 && parent) {
+        widget.isAlignTop = true;
+        widget.isAlignBottom = true;
+        if (top !== null && bottom === null) {
+            widget.top = top;
+            widget.bottom = parentSize.height * (1 - heightPercent) - top;
+        }
+        else if (bottom !== null && top === null) {
+            widget.top = parentSize.height * (1 - heightPercent) - bottom;
+            widget.bottom = bottom;
+        }
+        else if (bottom === null && top === null) {
+            widget.bottom = parentSize.height * (1 - heightPercent) / 2;
+            widget.top = widget.bottom;
+        } else {
+            widget.top = top;
+            widget.bottom = bottom;
+        }
+    }
+    else if (verticalCenter === 0) {
+        widget.isAlignVerticalCenter = true;
+    } else {
+        if (top !== null) {
+            widget.isAlignTop = true;
+            widget.top = top;
+        }
+
+        if (bottom !== null) {
+            widget.isAlignBottom = true;
+            widget.bottom = bottom;
+        }
+    }
+}
+
+function _initBaseNodeInfo(node, nodeInfo, usingSkin) {
     // get the parent
     var parent = node.getParent();
     var parentSize = cc.size(0, 0);
@@ -346,6 +443,9 @@ function _initBaseNodeInfo(node, nodeInfo) {
             nodeSize.width = parseFloat(width);
         }
     }
+    else if (usingSkin) {
+        nodeSize.width = node.getContentSize().width;
+    }
 
     if (height) {
         if (heightPercent >= 0) {
@@ -353,6 +453,9 @@ function _initBaseNodeInfo(node, nodeInfo) {
         } else {
             nodeSize.height = parseFloat(height);
         }
+    }
+    else if (usingSkin) {
+        nodeSize.height = node.getContentSize().height;
     }
     node.setContentSize(nodeSize);
 
@@ -379,8 +482,14 @@ function _initBaseNodeInfo(node, nodeInfo) {
     node.setScaleX(scaleX);
     node.setScaleY(scaleY);
 
+    // rotation
+    node.setRotation(XmlUtils.getFloatPropertyOfNode(nodeInfo, 'rotation', 0));
+
     // visible
     node.active = XmlUtils.getBoolPropertyOfNode(nodeInfo, 'visible', true);
+
+    // add widget component if necessary
+    _addWidget(node, nodeInfo, widthPercent, heightPercent);
 }
 
 function _getNodeName(nodeInfo, widgetName) {
@@ -545,7 +654,94 @@ function _importBitmapLabel(node, nodeInfo, cb) {
     }
 }
 
+function _tryAddComponent(node, component) {
+    var comObj = node.getComponent(component);
+    if (!comObj) {
+        comObj = node.addComponent(component);
+    }
+
+    return comObj;
+}
+
 function _importButton(node, nodeInfo, cb) {
+    cb();
+}
+
+function _initScrollBar(node, nodeInfo, direction) {
+    var scrollbar = _tryAddComponent(node, cc.Scrollbar);
+    if (!scrollbar) {
+        return;
+    }
+
+    scrollbar.direction = direction;
+    scrollbar.enableAutoHide = XmlUtils.getBoolPropertyOfNode(nodeInfo, 'autoVisibility', true);
+    var thumbNode = node.getChildByName('thumb');
+    if (thumbNode) {
+        var barSp = thumbNode.getComponent(cc.Sprite);
+        if (barSp) {
+            barSp.type = cc.Sprite.Type.SLICED;
+            barSp.trim = false;
+            barSp.sizeMode = cc.Sprite.SizeMode.CUSTOM;
+            scrollbar.handle = barSp;
+        }
+    }
+}
+
+function _importHScrollBar(node, nodeInfo, cb) {
+    _initScrollBar(node, nodeInfo, cc.Scrollbar.Direction.HORIZONTAL);
+    cb();
+}
+
+function _importVScrollBar(node, nodeInfo, cb) {
+    _initScrollBar(node, nodeInfo, cc.Scrollbar.Direction.VERTICAL);
+    cb();
+}
+
+function _importProgressBar(node, nodeInfo, cb) {
+    var progressbar = _tryAddComponent(node, cc.ProgressBar);
+    if (!progressbar) {
+        return;
+    }
+
+    var dir = XmlUtils.getPropertyOfNode(nodeInfo, 'direction', 'ltr');
+    progressbar.mode = cc.ProgressBar.Mode.FILLED;
+    progressbar.reverse = (dir === 'rtl' || dir === 'ttb');
+
+    var thumbNode = node.getChildByName('thumb');
+    if (thumbNode) {
+        var barSp = thumbNode.getComponent(cc.Sprite);
+        if (barSp) {
+            barSp.type = cc.Sprite.Type.FILLED;
+            barSp.trim = false;
+            barSp.sizeMode = cc.Sprite.SizeMode.CUSTOM;
+            if (dir === 'ltr' || dir === 'rtl') {
+                barSp.fillType = cc.Sprite.FillType.HORIZONTAL;
+            } else {
+                barSp.fillType = cc.Sprite.FillType.VERTICAL;
+            }
+            barSp.fillStart = progressbar.reverse ? 1 : 0;
+            barSp.fillRange = 1;
+            var nodeSize = node.getContentSize();
+            progressbar.barSprite = barSp;
+            node.setContentSize(nodeSize);
+        }
+    }
+
+    // values
+    var maxValue = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'maximum', 100);
+    var value = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'value', 0);
+    value = Math.round(value);
+    progressbar.totalLength = 1;
+    progressbar.progress = value / maxValue;
+
+    var labelNode = node.getChildByName('labelDisplay');
+    if (labelNode) {
+        var label = labelNode.getComponent(cc.Label);
+        if (label) {
+            label.string = `${value} / ${maxValue}`;
+        }
+    }
+
     cb();
 }
 
