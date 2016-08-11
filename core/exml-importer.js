@@ -16,6 +16,9 @@ const WidgetImporters = {
     'VScrollBar' : _importVScrollBar,
     'Scroller' : _importScroller,
     'ProgressBar' : _importProgressBar,
+    'Rect': _importRect,
+    'EditableText': _importLabel,
+    'TextInput': _importTextInput,
 };
 
 const ChildCheckers = {
@@ -23,6 +26,8 @@ const ChildCheckers = {
     'Label' : _noChildChecker,
     'Image' : _noChildChecker
 };
+
+const DEFAULT_SPLASH_SP_URL = 'db://internal/image/default_sprite_splash.png/default_sprite_splash';
 
 var skinPathToKey = null;
 var SkinsInfo = null;
@@ -552,6 +557,27 @@ function _importImage(node, nodeInfo, cb) {
     }
 }
 
+function _importRect(node, nodeInfo, cb) {
+    var sprite = _tryAddComponent(node, cc.Sprite);
+    if (!sprite) {
+        return;
+    }
+
+    sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
+    sprite.trim = false;
+    sprite.spriteFrame = new cc.SpriteFrame();
+    sprite.spriteFrame._uuid = Editor.assetdb.remote.urlToUuid(DEFAULT_SPLASH_SP_URL);
+
+    // color related
+    var fillAlpha = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'fillAlpha', 1);
+    if (fillAlpha > 1) fillAlpha = 1;
+    node.setOpacity(255 * fillAlpha);
+    var fillColor = XmlUtils.getPropertyOfNode(nodeInfo, 'fillColor', '0x000000');
+    node.setColor(cc.hexToColor(fillColor.replace('0x', '#')));
+
+    cb();
+}
+
 function _importLabel(node, nodeInfo, cb) {
     var label = node.addComponent(cc.Label);
     label.string = XmlUtils.getPropertyOfNode(nodeInfo, 'text', '');
@@ -801,6 +827,85 @@ function _importProgressBar(node, nodeInfo, cb) {
             label.string = `${value} / ${maxValue}`;
         }
     }
+
+    cb();
+}
+
+function _importTextInput(node, nodeInfo, cb) {
+    var edit = node.getComponent(cc.EditBox);
+    var isSkin = false;
+    if (!edit) {
+        edit = node.addComponent(cc.EditBox);
+        isSkin = true;
+    }
+
+    if (!edit) {
+        return cb();
+    }
+
+    // get some properties from children
+    var promptColor = null;
+    var promptSize = -1;
+    var promptNode = node.getChildByName('promptDisplay');
+    if (promptNode) {
+        var promptLabel = promptNode.getComponent(cc.Label);
+        if (promptLabel) {
+            promptColor = promptNode.getColor();
+            promptSize = promptLabel.fontSize;
+        }
+    }
+
+    var defaultTextColor = cc.color(255, 255, 255);
+    var textSize = -1;
+    var textNode = node.getChildByName('textDisplay');
+    if (textNode) {
+        var textLabel = textNode.getComponent(cc.Label);
+        if (textLabel) {
+            textSize = textLabel.fontSize;
+            defaultTextColor = textNode.getColor();
+        }
+    }
+
+    var backSpFrame = null;
+    var backImgNode = node.getChildByName('Image');
+    if (backImgNode) {
+        var backSprite = backImgNode.getComponent(cc.Sprite);
+        if (backSprite) {
+            backSpFrame = backSprite.spriteFrame;
+        }
+    }
+
+    if (isSkin) {
+        // if it's the skin of TextInput, should not remove children
+        // only set the children active to false
+        var children = node._children;
+        for (var idx in children) {
+            children[idx].active = false;
+        }
+    } else {
+        // remove all children
+        node.removeAllChildren();
+    }
+
+    // set the property of edit box
+    edit._useOriginalSize = false;
+    edit.string = XmlUtils.getPropertyOfNode(nodeInfo, 'text', '');
+    if (backSpFrame) edit.backgroundImage = backSpFrame;
+    var displayAsPassword = XmlUtils.getBoolPropertyOfNode(nodeInfo, 'displayAsPassword', false);
+    edit.inputFlag = displayAsPassword ? cc.EditBox.InputFlag.PASSWORD : cc.EditBox.InputFlag.SENSITIVE;
+    var maxLength = XmlUtils.getIntPropertyOfNode(nodeInfo, 'maxChars', 0);
+    if (textSize > 0) edit.fontSize = textSize;
+    edit.lineHeight = edit.fontSize;
+    var textColor = XmlUtils.getPropertyOfNode(nodeInfo, 'textColor', '');
+    if (textColor) {
+        edit.fontColor = cc.hexToColor(textColor.replace('0x', '#'));
+    } else {
+        edit.fontColor = defaultTextColor;
+    }
+    if (promptColor) edit.placeholderFontColor = promptColor;
+    if (promptSize > 0) edit.placehoderFontSize = promptSize;
+    edit.placeholder = XmlUtils.getPropertyOfNode(nodeInfo, 'prompt', '');
+    edit.maxLength = maxLength === 0 ? -1 : maxLength;
 
     cb();
 }
