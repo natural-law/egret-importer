@@ -37,6 +37,8 @@ var SrcResPath = null;
 var TempResPath = null;
 
 var importedExmls = [];
+var isImportingButton = false;
+var buttonStates = {};
 
 function importExmlFiles(exmlFiles, resInfo, srcResPath, tempResPath, targetRootUrl, cb) {
     ResInfo = resInfo;
@@ -278,6 +280,12 @@ function _createNodeGraph(parentNode, nodeInfo, widgetName, nsMap, cb) {
             // init the base node info
             _initBaseNodeInfo(node, nodeInfo, usingSkin);
 
+            if (widgetName === 'Button' || localName === 'Button') {
+                // clear the recored button states information
+                isImportingButton = true;
+                buttonStates = {};
+            }
+
             // create children
             var children = null;
             if (skinNameNode) {
@@ -320,10 +328,40 @@ function _createNodeGraph(parentNode, nodeInfo, widgetName, nsMap, cb) {
             } else {
                 next();
             }
+        },
+        function(next) {
+            _correctTheSize(node, nodeInfo);
+            next();
         }
     ], function() {
         cb(node);
     });
+}
+
+function _correctTheSize(node, nodeInfo)
+{
+    var sp = node.getComponent(cc.Sprite);
+    var label = node.getComponent(cc.Label);
+    if (sp || label) {
+        return;
+    }
+
+    var newSize = node.getContentSize();
+    var updateWidth = newSize.width === 0;
+    var updateHeight = newSize.height === 0;
+    if (updateWidth || updateHeight) {
+        for (var idx in node._children) {
+            var childSize = node._children[idx].getContentSize();
+            if (updateWidth) {
+                newSize.width = Math.max(newSize.width, childSize.width);
+            }
+
+            if (updateHeight) {
+                newSize.height = Math.max(newSize.height, childSize.height);
+            }
+        }
+        node.setContentSize(newSize);
+    }
 }
 
 function _getPercentValue(theValue) {
@@ -438,6 +476,10 @@ function _initBaseNodeInfo(node, nodeInfo, usingSkin) {
     // init the width & height
     var width = XmlUtils.getPropertyInOrder(nodeInfo, [ 'width', 'minWidth', 'maxWidth' ], '');
     var height = XmlUtils.getPropertyInOrder(nodeInfo, [ 'height', 'minHeight', 'maxHeight' ], '');
+    var left = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'left', null);
+    var right = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'right', null);
+    var top = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'top', null);
+    var bottom = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'bottom', null);
     var widthPercent = _getPercentValue(width);
     var heightPercent = _getPercentValue(height);
 
@@ -449,6 +491,9 @@ function _initBaseNodeInfo(node, nodeInfo, usingSkin) {
             nodeSize.width = parseFloat(width);
         }
     }
+    else if (left !== null && right !== null) {
+        nodeSize.width = parentSize.width - left - right;
+    }
     else if (usingSkin) {
         nodeSize.width = node.getContentSize().width;
     }
@@ -459,6 +504,9 @@ function _initBaseNodeInfo(node, nodeInfo, usingSkin) {
         } else {
             nodeSize.height = parseFloat(height);
         }
+    }
+    else if (top !== null && bottom !== null) {
+        nodeSize.height = parentSize.height - top - bottom;
     }
     else if (usingSkin) {
         nodeSize.height = node.getContentSize().height;
@@ -522,6 +570,13 @@ function _importImage(node, nodeInfo, cb) {
         sprite.spriteFrame = _getSpriteFrame(uuid);
     }
 
+    if (isImportingButton) {
+        buttonStates.up = sourceProp;
+        buttonStates.down = XmlUtils.getPropertyOfNode(nodeInfo, 'source.down', '');
+        buttonStates.disabled = XmlUtils.getPropertyOfNode(nodeInfo, 'source.disabled', '');
+        isImportingButton = false;
+    }
+
     // get the size config
     var width = XmlUtils.getPropertyInOrder(nodeInfo, [ 'width', 'minWidth', 'maxWidth' ], '');
     var height = XmlUtils.getPropertyInOrder(nodeInfo, [ 'height', 'minHeight', 'maxHeight' ], '');
@@ -532,29 +587,50 @@ function _importImage(node, nodeInfo, cb) {
     }
 
     var scale9Grid = XmlUtils.getPropertyOfNode(nodeInfo, 'scale9Grid', '');
-    if (scale9Grid) {
-        sprite.type = cc.Sprite.Type.SLICED;
-        if (uuid) {
-            _setScale9Properties(scale9Grid, uuid, cb);
-        } else {
-            cb();
+    Async.waterfall([
+        function(next) {
+            if (uuid && sprite.sizeMode !== cc.Sprite.SizeMode.RAW && node.getContentSize().equals(cc.Size.ZERO)) {
+                // use the image size as the default size
+                Editor.assetdb.queryMetaInfoByUuid(uuid, function(err,info) {
+                    if (!info) {
+                        next();
+                        return;
+                    }
+
+                    var meta = JSON.parse(info.json);
+                    node.setContentSize(cc.size(meta.rawWidth, meta.rawHeight));
+                    next();
+                });
+            } else {
+                next();
+            }
+        },
+        function(next) {
+            if (scale9Grid) {
+                sprite.type = cc.Sprite.Type.SLICED;
+                if (uuid) {
+                    _setScale9Properties(scale9Grid, uuid, next);
+                } else {
+                    next();
+                }
+            } else {
+                var fillMode = XmlUtils.getPropertyOfNode(nodeInfo, 'fillMode', 'scale');
+                switch(fillMode) {
+                    case 'repeat':
+                        sprite.type = cc.Sprite.Type.TILED;
+                        break;
+                    case 'clip':
+                    // TODO sprite in Creator not support this effect
+                    // treat it as default
+                    case 'scale':
+                    default:
+                        sprite.type = cc.Sprite.Type.SIMPLE;
+                        break;
+                }
+                next();
+            }
         }
-    } else {
-        var fillMode = XmlUtils.getPropertyOfNode(nodeInfo, 'fillMode', 'scale');
-        switch(fillMode) {
-            case 'repeat':
-                sprite.type = cc.Sprite.Type.TILED;
-                break;
-            case 'clip':
-                // TODO sprite in Creator not support this effect
-                // treat it as default
-            case 'scale':
-            default:
-                sprite.type = cc.Sprite.Type.SIMPLE;
-                break;
-        }
-        cb();
-    }
+    ], cb);
 }
 
 function _importRect(node, nodeInfo, cb) {
@@ -624,9 +700,7 @@ function _importLabel(node, nodeInfo, cb) {
     }
 
     // overflow mode
-    var width = XmlUtils.getPropertyInOrder(nodeInfo, [ 'width', 'minWidth', 'maxWidth' ], '');
-    var height = XmlUtils.getPropertyInOrder(nodeInfo, [ 'height', 'minHeight', 'maxHeight' ], '');
-    if (! width && ! height) {
+    if (node.getContentSize().equals(cc.Size.ZERO)) {
         label.overflow = cc.Label.Overflow.NONE;
     } else {
         label.overflow = cc.Label.Overflow.CLAMP;
@@ -691,6 +765,50 @@ function _tryAddComponent(node, component) {
 }
 
 function _importButton(node, nodeInfo, cb) {
+    var button = _tryAddComponent(node, cc.Button);
+    if (!button) {
+        return cb();
+    }
+
+    button.interactable = XmlUtils.getBoolPropertyOfNode(nodeInfo, 'enabled', true);
+    var imageNode = node.getChildByName('Image');
+    if (imageNode) {
+        var sprite = imageNode.getComponent(cc.Sprite);
+        if (sprite) {
+            button.target = imageNode;
+            button.transition = cc.Button.Transition.SPRITE;
+            if (buttonStates.hasOwnProperty('up') ||
+                buttonStates.hasOwnProperty('down') ||
+                buttonStates.hasOwnProperty('disabled')) {
+                var upSpFrame = _getSpriteFrame(_getResUuidByName(buttonStates.up, true));
+                var downSpFrame = _getSpriteFrame(_getResUuidByName(buttonStates.down, true));
+                var disableSpFrame = _getSpriteFrame(_getResUuidByName(buttonStates.disabled, true));
+                button.normalSprite = upSpFrame;
+                button.pressedSprite = downSpFrame || upSpFrame;
+                button.hoverSprite = upSpFrame;
+                button.disabledSprite = disableSpFrame || upSpFrame;
+            }
+        }
+    }
+    buttonStates = {};
+
+    var labelDisplay = node.getChildByName('labelDisplay');
+    if (labelDisplay) {
+        var label = labelDisplay.getComponent(cc.Label);
+        if (label) {
+            label.string = XmlUtils.getPropertyOfNode(nodeInfo, 'label', '');
+        }
+    }
+
+    var iconDisplay = node.getChildByName('iconDisplay');
+    if (iconDisplay) {
+        var iconSp = iconDisplay.getComponent(cc.Sprite);
+        if (iconSp) {
+            var iconCfg = XmlUtils.getPropertyOfNode(nodeInfo, 'icon', '');
+            iconSp.spriteFrame = _getSpriteFrame(_getResUuidByName(iconCfg, true));
+        }
+    }
+
     cb();
 }
 
