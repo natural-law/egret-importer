@@ -21,11 +21,9 @@ const WidgetImporters = {
     'TextInput': _importTextInput,
 };
 
-const ChildCheckers = {
-    'Button' : _noChildChecker,
-    'Label' : _noChildChecker,
-    'Image' : _noChildChecker
-};
+//const ChildCheckers = {
+//    'Group' : _defaultChecker,
+//};
 
 const DEFAULT_SPLASH_SP_URL = 'db://internal/image/default_sprite_splash.png/default_sprite_splash';
 
@@ -294,24 +292,28 @@ function _createNodeGraph(parentNode, nodeInfo, widgetName, nsMap, cb) {
             } else {
                 children = XmlUtils.getAllChildren(nodeInfo);
             }
+
+            children = children.filter((item) => {
+                var itemSkinKey = _getSkinKey(item.localName, item.prefix, nsMap);
+                if (itemSkinKey && SkinsInfo[itemSkinKey]) {
+                    return true;
+                }
+
+                var firstChar = item.localName[0];
+                return firstChar !== firstChar.toLowerCase();
+            });
+
             var index = 0;
             Async.whilst(function() {
                     return index < children.length;
                 },
                 function(callback) {
                     var childInfo = children[index];
-                    var checker = ChildCheckers[widgetKey];
-                    if (!widgetName && checker && !checker(childInfo)) {
-                        // not a valid child
+                    // create child node
+                    _createNodeGraph(node, childInfo, null, nsMap, function(childNode) {
                         index++;
                         callback();
-                    } else {
-                        // create child node
-                        _createNodeGraph(node, childInfo, null, nsMap, function(childNode) {
-                            index++;
-                            callback();
-                        });
-                    }
+                    });
                 },
                 next
             );
@@ -700,9 +702,14 @@ function _importLabel(node, nodeInfo, cb) {
     }
 
     // overflow mode
-    if (node.getContentSize().equals(cc.Size.ZERO)) {
+    var size = node.getContentSize();
+    if (size.width === 0) {
         label.overflow = cc.Label.Overflow.NONE;
     } else {
+        if (size.height === 0) {
+            node.setContentSize(cc.size(size.width, label._fontSize));
+        }
+
         label.overflow = cc.Label.Overflow.CLAMP;
         label._useOriginalSize = false;
     }
@@ -1029,9 +1036,12 @@ function _importTextInput(node, nodeInfo, cb) {
 }
 
 // methods for checking valid children
-function _noChildChecker(childInfo) {
-    return false;
-}
+//function _defaultChecker(childInfo) {
+//    if (childInfo.localName[0]) {
+//
+//    }
+//    return false;
+//}
 
 module.exports = {
     importExmlFiles: importExmlFiles
