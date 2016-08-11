@@ -14,6 +14,7 @@ const WidgetImporters = {
     'Button' : _importButton,
     'HScrollBar' : _importHScrollBar,
     'VScrollBar' : _importVScrollBar,
+    'Scroller' : _importScroller,
     'ProgressBar' : _importProgressBar,
 };
 
@@ -697,10 +698,69 @@ function _importVScrollBar(node, nodeInfo, cb) {
     cb();
 }
 
+function _importScroller(node, nodeInfo, cb) {
+    var scroll = _tryAddComponent(node, cc.ScrollView);
+    if (!scroll) {
+        return cb();
+    }
+
+    // add a mask component
+    _tryAddComponent(node, cc.Mask);
+
+    // set property of scroll view
+    var scrollPolicyH = XmlUtils.getPropertyOfNode(nodeInfo, 'scrollPolicyH', 'auto');
+    var scrollPolicyV = XmlUtils.getPropertyOfNode(nodeInfo, 'scrollPolicyV', 'auto');
+    scroll.horizontal = (scrollPolicyH !== 'off');
+    scroll.vertical = (scrollPolicyV !== 'off');
+
+    var hBarNode = node.getChildByName('horizontalScrollBar');
+    var vBarNode = node.getChildByName('verticalScrollBar');
+    if (hBarNode) {
+        var hBarCom = hBarNode.getComponent(cc.Scrollbar);
+        if (hBarCom) {
+            scroll.horizontalScrollBar = hBarCom;
+        }
+    }
+
+    if (vBarNode) {
+        var vBarCom = vBarNode.getComponent(cc.Scrollbar);
+        if (vBarCom) {
+            scroll.verticalScrollBar = vBarCom;
+        }
+    }
+
+    var throwSpeed = XmlUtils.getFloatPropertyOfNode(nodeInfo, 'throwSpeed', 0);
+    scroll.inertia = (throwSpeed > 0);
+
+    // set content of scroll view
+    var containerTypes = [ 'Group', 'DataGroup', 'List', 'ListBase', 'TabBar', 'ViewStack' ];
+    var viewport = node.getChildByName('viewport');
+    if (!viewport) {
+        for (var idx in containerTypes) {
+            var containerName = containerTypes[idx];
+            var childNode = node.getChildByName(containerName);
+            if (childNode) {
+                viewport = childNode;
+                break;
+            }
+        }
+    }
+
+    if (!viewport) {
+        return cb();
+    }
+    var viewSize = viewport.getContentSize();
+    if (viewSize.equals(cc.Size.ZERO)) {
+        viewport.setContentSize(node.getContentSize());
+    }
+    scroll.content = viewport;
+    cb();
+}
+
 function _importProgressBar(node, nodeInfo, cb) {
     var progressbar = _tryAddComponent(node, cc.ProgressBar);
     if (!progressbar) {
-        return;
+        return cb();
     }
 
     var dir = XmlUtils.getPropertyOfNode(nodeInfo, 'direction', 'ltr');
