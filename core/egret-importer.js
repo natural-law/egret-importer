@@ -14,9 +14,11 @@ const ACTION_FOLDER_SUFFIX = '_action';
 const ACTION_NODE_NAME = 'sprite';
 
 var tempResPath = '';
+var tempPrefabPath = '';
 var projectPath = '';
 var resourcePath = '';
 var newResourceUrl = '';
+var newPrefabUrl = '';
 var projectName = '';
 var jsonFiles = {};
 var exmlFiles = [];
@@ -47,43 +49,45 @@ function importProject(projPath, cb) {
     // get the new resource url for imported project
     try {
         newResourceUrl = Url.join(AssetsRootUrl, projectName);
+        newPrefabUrl = newResourceUrl;
         var i = 1;
-        while (Fs.existsSync(Editor.assetdb.remote._fspath(newResourceUrl))) {
-            newResourceUrl = Url.join(AssetsRootUrl, projectName + '_' + i);
+        while (Fs.existsSync(Editor.assetdb.remote._fspath(newPrefabUrl))) {
+            newPrefabUrl = Url.join(AssetsRootUrl, projectName + '_' + i);
             i++;
         }
+
+        var folderName = Url.basename(newResourceUrl);
+        tempResPath = Path.join(Editor.remote.projectPath, TempFolderName, folderName);
+        folderName = Url.basename(newPrefabUrl);
+        tempPrefabPath = Path.join(Editor.remote.projectPath, TempFolderName, folderName);
     } catch (err) {
         return cb(err);
     }
 
-    // create temp path
-    _createTempResPath();
-
     // import the resource files
     try {
-        // create a folder with project name in assets
-        _createAssetFolder(resourcePath);
-
-        _copyResources(resourcePath, tempResPath, resourcePath);
-
         Async.waterfall([
             function(next) {
-                // import raw assets
-                Editor.assetdb.import([tempResPath], AssetsRootUrl, false, function(err, results) {
-                    _removeTempResPath();
+                Editor.assetdb.remote.watchOFF();
+                Editor.assetdb.remote._tasks.push({
+                    name: 'import-egret-assets',
+                    run: _importAssets,
+                    params: [],
+                    silent: true
+                }, function() {
+                    next();
+                });
+            },
+            function(next) {
+                Editor.assetdb.refresh(newResourceUrl, function() {
+                    Editor.assetdb.remote.watchON();
                     next();
                 });
             },
             function(next) {
                 // import animation assets
                 _importAnimFiles(function (err) {
-                    if (err) {
-                        next(err);
-                        return;
-                    }
-
-                    _removeTempResPath();
-                    next();
+                    next(err);
                 });
             },
             function(next) {
@@ -138,7 +142,7 @@ function importProject(projPath, cb) {
                 }
 
                 // import exml files
-                ExmlImporter.importExmlFiles(needImportExmls, resInfo, resourcePath, tempResPath, newResourceUrl, next);
+                ExmlImporter.importExmlFiles(needImportExmls, resInfo, resourcePath, tempPrefabPath, newResourceUrl, newPrefabUrl, next);
             }
         ], function (err) {
             if (err) {
@@ -147,9 +151,10 @@ function importProject(projPath, cb) {
             }
 
             Editor.log('Import Egret project finished.');
-            Editor.log('Resources are imported to folder : %s', newResourceUrl);
+            Editor.log('Resources are imported to folder : %s', newPrefabUrl);
 
             _removeTempResPath();
+            _removeTempPrefabPath();
             cb();
         });
     } catch (err) {
@@ -157,6 +162,27 @@ function importProject(projPath, cb) {
         //_removeTempResPath();
 
         cb(new Error('Import resource files failed.'));
+    }
+}
+
+function _importAssets(assetdb, cb) {
+    var newResPath = Editor.assetdb.remote.urlToFspath(newResourceUrl);
+    _copyResources(resourcePath, newResPath, resourcePath);
+    var animFiles = jsonFiles.anim_cfg;
+    if (!animFiles || animFiles.length === 0) {
+        if (cb) {
+            cb();
+        }
+        return;
+    }
+
+    // generate plist file for the animation frames
+    for (var idx in animFiles) {
+        _genPlistForAnim(animFiles[idx]);
+    }
+
+    if (cb) {
+        cb();
     }
 }
 
@@ -174,17 +200,6 @@ function _rmdirRecursive (path) {
     }
 }
 
-function _createTempResPath() {
-    // create a temp path for import project
-    var folderName = Url.basename(newResourceUrl);
-    tempResPath = Path.join(Editor.remote.projectPath, TempFolderName, folderName);
-    if (Fs.existsSync(tempResPath)) {
-        _rmdirRecursive(tempResPath);
-    }
-
-    Fs.mkdirsSync(tempResPath);
-}
-
 function _removeTempResPath() {
     try {
         _rmdirRecursive(tempResPath);
@@ -193,11 +208,11 @@ function _removeTempResPath() {
     }
 }
 
-function _createAssetFolder(folderPath) {
-    var relativePath = Path.relative(resourcePath, folderPath);
-    var newFsPath = Path.join(tempResPath, relativePath);
-    if (!Fs.existsSync(newFsPath)) {
-        Fs.mkdirsSync(newFsPath);
+function _removeTempPrefabPath() {
+    try {
+        _rmdirRecursive(tempPrefabPath);
+    } catch (err) {
+        Editor.warn('Delete temp path %s failed, please delete it manually!', tempPrefabPath);
     }
 }
 
@@ -230,9 +245,7 @@ function _handleJsonFile(absPath, targetPath) {
         jsonFiles[jsonType].push(absPath);
     } else {
         // copy to the target path
-        if (!Fs.existsSync(targetPath)) {
-            Fs.copySync(absPath, targetPath);
-        }
+        Fs.copySync(absPath, targetPath);
     }
 }
 
@@ -282,9 +295,7 @@ function _handleFntFile(absPath, targetPath) {
 
     if (!customFnt) {
         // not custom fnt file, copy to the target path
-        if (!Fs.existsSync(targetPath)) {
-            Fs.copySync(absPath, targetPath);
-        }
+        Fs.copySync(absPath, targetPath);
     }
 }
 
@@ -293,10 +304,6 @@ function _copyResources(srcPath, dstPath, resRoot) {
         var absPath = Path.join(srcPath, file);
         var targetPath = Path.join(dstPath, file);
         if(Fs.lstatSync(absPath).isDirectory()) {
-            if (!Fs.existsSync(targetPath)) {
-                Fs.mkdirsSync(targetPath);
-            }
-
             // recurse
             _copyResources(absPath, targetPath, resRoot);
         } else {
@@ -308,9 +315,8 @@ function _copyResources(srcPath, dstPath, resRoot) {
             } else if (ext === '.fnt') {
                 _handleFntFile(absPath, targetPath);
             } else {
-                if (!Fs.existsSync(targetPath)) {
-                    Fs.copySync(absPath, targetPath);
-                }
+                Fs.ensureDirSync(dstPath);
+                Fs.copySync(absPath, targetPath);
             }
         }
     });
@@ -327,18 +333,6 @@ function _importAnimFiles(cb) {
     var animUrls = {};
     Async.waterfall([
         function(next) {
-            // generate plist file for frames
-            for (var idx in animFiles) {
-                _genPlistForAnim(animFiles[idx]);
-            }
-
-            // import plist files
-            Editor.assetdb.import([tempResPath], AssetsRootUrl, false, function(err, results) {
-                _removeTempResPath();
-                next();
-            });
-        },
-        function(next) {
             // generate the anim files for Creator
             for (var idx in animFiles) {
                 var animFile = animFiles[idx];
@@ -346,8 +340,8 @@ function _importAnimFiles(cb) {
             }
 
             // import anim files
-            Editor.assetdb.import([tempResPath], AssetsRootUrl, false, function(err, results) {
-                _removeTempResPath();
+            Editor.assetdb.import([tempPrefabPath], AssetsRootUrl, false, function(err, results) {
+                _removeTempPrefabPath();
                 next();
             });
         },
@@ -359,8 +353,8 @@ function _importAnimFiles(cb) {
             }
 
             // import prefab files
-            Editor.assetdb.import([tempResPath], AssetsRootUrl, false, function(err, results) {
-                _removeTempResPath();
+            Editor.assetdb.import([tempPrefabPath], AssetsRootUrl, false, function(err, results) {
+                _removeTempPrefabPath();
                 next();
             });
         }
@@ -374,7 +368,8 @@ function _importAnimFiles(cb) {
 function _genPlistForAnim(animFile) {
     var name = Path.basename(animFile, Path.extname(animFile));
     var relativeDir = Path.relative(resourcePath, Path.dirname(animFile));
-    var plistPath = Path.join(tempResPath, relativeDir, name + '.plist');
+    var newResPath = Editor.assetdb.remote.urlToFspath(newResourceUrl);
+    var plistPath = Path.join(newResPath, relativeDir, name + '.plist');
     var pngName = name + '.png';
 
     var animCfg = JSON.parse(Fs.readFileSync(animFile, 'utf8'));
@@ -410,11 +405,7 @@ function _genPlistForAnim(animFile) {
 
     plistObj.metadata.size = `{${imgWidth},${imgHeight}}`;
 
-    var plistDir = Path.dirname(plistPath);
-    if (!Fs.existsSync(plistDir)) {
-        Fs.mkdirsSync(plistDir);
-    }
-
+    Fs.ensureDirSync(Path.dirname(plistPath));
     var plistContent = Plist.build(plistObj);
     Fs.writeFileSync(plistPath, plistContent);
 }
@@ -424,7 +415,7 @@ function _genAnimFile(animFile) {
     var relativeDir = Path.relative(resourcePath, Path.dirname(animFile));
     var plistUrl = Url.join(newResourceUrl, relativeDir, name + '.plist');
 
-    var animFolderPath = Path.join(tempResPath, relativeDir, name + ACTION_FOLDER_SUFFIX);
+    var animFolderPath = Path.join(tempPrefabPath, relativeDir, name + ACTION_FOLDER_SUFFIX);
     var animCfg = JSON.parse(Fs.readFileSync(animFile, 'utf8'));
 
     // create animation clip files
@@ -479,12 +470,10 @@ function _genAnimFile(animFile) {
         animClip.curveData = curveData;
         var animClipStr = Editor.serialize(animClip);
 
-        if (!Fs.existsSync(animFolderPath)) {
-            Fs.mkdirsSync(animFolderPath);
-        }
+        Fs.ensureDirSync(animFolderPath);
         Fs.writeFileSync(animFilePath, animClipStr);
 
-        importedUrls.push(Url.join(newResourceUrl, relativeDir, name + ACTION_FOLDER_SUFFIX, animName + '.anim'));
+        importedUrls.push(Url.join(newPrefabUrl, relativeDir, name + ACTION_FOLDER_SUFFIX, animName + '.anim'));
     }
 
     return importedUrls;
@@ -498,7 +487,7 @@ function _genAnimPrefab(animFile, animUrls) {
     // create prefab to use the animation clips
     var name = Path.basename(animFile, Path.extname(animFile));
     var relativeDir = Path.relative(resourcePath, Path.dirname(animFile));
-    var prefabPath = Path.join(tempResPath, relativeDir, name + '.prefab');
+    var prefabPath = Path.join(tempPrefabPath, relativeDir, name + '.prefab');
     var node = new cc.Node('node');
     var spNode = new cc.Node(ACTION_NODE_NAME);
     node.addChild(spNode);
@@ -529,11 +518,7 @@ function _genAnimPrefab(animFile, animUrls) {
         }
     }
 
-    var prefabDir = Path.dirname(prefabPath);
-    if (!Fs.existsSync(prefabDir)) {
-        Fs.mkdirsSync(prefabDir);
-    }
-
+    Fs.ensureDirSync(Path.dirname(prefabPath));
     var prefab = _Scene.PrefabUtils.createPrefabFrom(node);
     var prefabData = Editor.serialize(prefab);
     Fs.writeFileSync(prefabPath, prefabData);

@@ -30,19 +30,21 @@ const DEFAULT_SPLASH_SP_URL = 'db://internal/image/default_sprite_splash.png/def
 var skinPathToKey = null;
 var SkinsInfo = null;
 var ResInfo = null;
-var RootUrl = null;
+var ResRootUrl = null;
+var PrefabRootUrl = null;
 var SrcResPath = null;
-var TempResPath = null;
+var TempPrefabPath = null;
 
 var importedExmls = [];
 var isImportingButton = false;
 var buttonStates = {};
 
-function importExmlFiles(exmlFiles, resInfo, srcResPath, tempResPath, targetRootUrl, cb) {
+function importExmlFiles(exmlFiles, resInfo, srcResPath, tempPrefabPath, resRootUrl, prefabRootUrl, cb) {
     ResInfo = resInfo;
-    RootUrl = targetRootUrl;
+    ResRootUrl = resRootUrl;
+    PrefabRootUrl = prefabRootUrl;
     SrcResPath = srcResPath;
-    TempResPath = tempResPath;
+    TempPrefabPath = tempPrefabPath;
 
     SkinsInfo = exmlFiles.skins;
     skinPathToKey = {};
@@ -82,7 +84,7 @@ function _getResUuidByName(resName, isSpFrame) {
         resPath = resName;
     }
 
-    var resUrl = Url.join(RootUrl, resPath);
+    var resUrl = Url.join(ResRootUrl, resPath);
     if (isSpFrame) {
         var frameKey = Path.basename(resPath, Path.extname(resPath));
         resUrl = Url.join(resUrl, frameKey);
@@ -172,8 +174,8 @@ function _importExml(exmlPath, cb) {
     var exmlName = Path.basename(exmlPath, Path.extname(exmlPath));
     var prefabName = exmlName + '.prefab';
     var relativeFolderPath = Path.relative(SrcResPath, Path.dirname(exmlPath));
-    var targetUrl = Url.join(RootUrl, relativeFolderPath);
-    var prefabPath = Path.join(TempResPath, relativeFolderPath, prefabName);
+    var targetUrl = Url.join(PrefabRootUrl, relativeFolderPath);
+    var prefabPath = Path.join(TempPrefabPath, relativeFolderPath, prefabName);
     var prefabUrl = Url.join(targetUrl, prefabName);
 
     if (importedExmls.indexOf(exmlPath) >= 0) {
@@ -191,6 +193,32 @@ function _importExml(exmlPath, cb) {
                 return next();
             }
 
+            var targetFsPath = Editor.assetdb.remote.urlToFspath(targetUrl);
+            if (!Fs.existsSync(targetFsPath)) {
+                Editor.assetdb.remote.watchOFF();
+                Editor.assetdb.remote._tasks.push({
+                    name: 'create-folder',
+                    run: function(assetdb, cb) {
+                        Fs.mkdirsSync(targetFsPath);
+                        if (cb) {
+                            cb();
+                        }
+                    },
+                    params: [],
+                    silent: true
+                }, function() {
+                    next();
+                });
+            } else {
+                next();
+            }
+        },
+        function(next) {
+            if (!Fs.existsSync(prefabPath)) {
+                return next();
+            }
+
+            Editor.assetdb.remote.watchON();
             Editor.assetdb.import([prefabPath], targetUrl, false, function () {
                 importedExmls.push(exmlPath);
                 next();
@@ -217,10 +245,7 @@ function _createPrefabFromFile(exmlPath, prefabPath, cb) {
     _createNodeGraph(null, rootNodeInfo, widgetName, nsMap, function(theNode) {
         var prefab = _Scene.PrefabUtils.createPrefabFrom(theNode);
         var prefabData = Editor.serialize(prefab);
-        var targetFolder = Path.dirname(prefabPath);
-        if (!Fs.existsSync(targetFolder)) {
-            Fs.mkdirsSync(targetFolder);
-        }
+        Fs.ensureDirSync(Path.dirname(prefabPath));
         Fs.writeFileSync(prefabPath, prefabData);
         cb();
     });
