@@ -419,8 +419,9 @@ function _addWidget(node, nodeInfo, widthPercent, heightPercent) {
             widget.right = right;
         }
     }
-    else if (horizontalCenter === 0) {
+    else if (horizontalCenter !== null) {
         widget.isAlignHorizontalCenter = true;
+        widget.horizontalCenter = horizontalCenter;
     } else {
         if (left !== null) {
             widget.isAlignLeft = true;
@@ -452,8 +453,9 @@ function _addWidget(node, nodeInfo, widthPercent, heightPercent) {
             widget.bottom = bottom;
         }
     }
-    else if (verticalCenter === 0) {
+    else if (verticalCenter !== null) {
         widget.isAlignVerticalCenter = true;
+        widget.verticalCenter = -verticalCenter;
     } else {
         if (top !== null) {
             widget.isAlignTop = true;
