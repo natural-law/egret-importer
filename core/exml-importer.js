@@ -193,33 +193,9 @@ function _importExml(exmlPath, cb) {
                 return next();
             }
 
-            var targetFsPath = Editor.assetdb.remote.urlToFspath(targetUrl);
-            if (!Fs.existsSync(targetFsPath)) {
-                Editor.assetdb.remote.watchOFF();
-                Editor.assetdb.remote._tasks.push({
-                    name: 'create-folder',
-                    run: function(assetdb, cb) {
-                        Fs.mkdirsSync(targetFsPath);
-                        if (cb) {
-                            cb();
-                        }
-                    },
-                    params: [],
-                    silent: true
-                }, function() {
-                    next();
-                });
-            } else {
-                next();
-            }
-        },
-        function(next) {
-            if (!Fs.existsSync(prefabPath)) {
-                return next();
-            }
-
-            Editor.assetdb.remote.watchON();
             Editor.assetdb.import([prefabPath], targetUrl, false, function () {
+                // remove the prefab file in temp folder after import
+                Fs.unlinkSync(prefabPath);
                 importedExmls.push(exmlPath);
                 next();
             });

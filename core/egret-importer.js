@@ -6,12 +6,14 @@ const Url = require('fire-url');
 const Async = require('async');
 const Plist = require('plist');
 const ExmlImporter = require('./exml-importer');
+const MD5 = require('md5');
 
 const AssetsRootUrl = 'db://assets';
 const ResFolderName = 'resource';
 const TempFolderName = 'temp';
 const ACTION_FOLDER_SUFFIX = '_action';
 const ACTION_NODE_NAME = 'sprite';
+const TEMP_FILES_SUFFIX = '_temp';
 
 var tempResPath = '';
 var tempPrefabPath = '';
@@ -68,19 +70,46 @@ function importProject(projPath, cb) {
     try {
         Async.waterfall([
             function(next) {
-                Editor.assetdb.remote.watchOFF();
-                Editor.assetdb.remote._tasks.push({
-                    name: 'import-egret-assets',
-                    run: _importAssets,
-                    params: [],
-                    silent: true
-                }, function() {
-                    next();
-                });
+                //Editor.assetdb.remote.watchOFF();
+                //Editor.assetdb.remote._tasks.push({
+                //    name: 'import-egret-assets',
+                //    run: _importAssets,
+                //    params: [],
+                //    silent: true
+                //}, function(needRefreshUrls) {
+                //    if (!needRefreshUrls || needRefreshUrls.length === 0) {
+                //        return next();
+                //    }
+                //
+                //    var index = 0;
+                //    Async.whilst(
+                //        function() {
+                //            return index < needRefreshUrls.length;
+                //        },
+                //        function(callback) {
+                //            Editor.assetdb.refresh(needRefreshUrls[index], function() {
+                //                index++;
+                //                callback();
+                //            });
+                //        },
+                //        function() {
+                //            next();
+                //        }
+                //    );
+                //});
+                //Editor.assetdb.remote.watchON();
+                _importAssets();
+                next();
             },
             function(next) {
-                Editor.assetdb.refresh(newResourceUrl, function() {
-                    Editor.assetdb.remote.watchON();
+                if (!Fs.existsSync(tempResPath)) {
+                    return next();
+                }
+
+                // import files in tempResPath
+                Editor.assetdb.import([tempResPath], AssetsRootUrl, false, function() {
+                    _removeTempResPath();
+                    _removeTempFilesPath();
                     next();
                 });
             },
@@ -88,6 +117,26 @@ function importProject(projPath, cb) {
                 // import animation assets
                 _importAnimFiles(function (err) {
                     next(err);
+                });
+            },
+            function(next) {
+                if (exmlFiles.length === 0) {
+                    // there isn't any exmls
+                    next();
+                    return;
+                }
+
+                // create the folders for the exmlFiles
+                for (var i = 0, n = exmlFiles.length; i < n; i++) {
+                    var exmlPath = exmlFiles[i];
+                    var relativeDir = Path.relative(resourcePath, Path.dirname(exmlPath));
+                    var checkPath = Path.join(tempPrefabPath, relativeDir);
+                    Fs.ensureDirSync(checkPath);
+                }
+
+                // import the temp prefab path
+                Editor.assetdb.import([tempPrefabPath], AssetsRootUrl, false, function(err, results) {
+                    next();
                 });
             },
             function(next) {
@@ -155,6 +204,7 @@ function importProject(projPath, cb) {
 
             _removeTempResPath();
             _removeTempPrefabPath();
+            _removeTempFilesPath();
             cb();
         });
     } catch (err) {
@@ -166,23 +216,23 @@ function importProject(projPath, cb) {
 }
 
 function _importAssets(assetdb, cb) {
-    var newResPath = Editor.assetdb.remote.urlToFspath(newResourceUrl);
-    _copyResources(resourcePath, newResPath, resourcePath);
+    var needRefreshUrls = [];
+    _copyResources(resourcePath, needRefreshUrls);
     var animFiles = jsonFiles.anim_cfg;
     if (!animFiles || animFiles.length === 0) {
         if (cb) {
-            cb();
+            cb(needRefreshUrls);
         }
         return;
     }
 
     // generate plist file for the animation frames
     for (var idx in animFiles) {
-        _genPlistForAnim(animFiles[idx]);
+        _genPlistForAnim(animFiles[idx], needRefreshUrls);
     }
 
     if (cb) {
-        cb();
+        cb(needRefreshUrls);
     }
 }
 
@@ -197,6 +247,15 @@ function _rmdirRecursive (path) {
             }
         });
         Fs.rmdirSync(path);
+    }
+}
+
+function _removeTempFilesPath() {
+    var tempFilesPath = Path.join(Editor.remote.projectPath, TempFolderName, projectName + TEMP_FILES_SUFFIX);
+    try {
+        _rmdirRecursive(tempFilesPath);
+    } catch (err) {
+        Editor.warn('Delete temp path %s failed, please delete it manually!', tempFilesPath);
     }
 }
 
@@ -216,7 +275,7 @@ function _removeTempPrefabPath() {
     }
 }
 
-function _handleJsonFile(absPath, targetPath) {
+function _handleJsonFile(absPath, needRefreshUrls) {
     // json files should be separated with type
     var fileContent = Fs.readFileSync(absPath, 'utf8');
     var jsonType = null;
@@ -245,11 +304,11 @@ function _handleJsonFile(absPath, targetPath) {
         jsonFiles[jsonType].push(absPath);
     } else {
         // copy to the target path
-        Fs.copySync(absPath, targetPath);
+        _handleFile(absPath, needRefreshUrls);
     }
 }
 
-function _handleFntFile(absPath, targetPath) {
+function _handleFntFile(absPath, needRefreshUrls) {
     // should convert the fnt file if it's a json
     var customFnt = false;
     try {
@@ -288,38 +347,91 @@ function _handleFntFile(absPath, targetPath) {
         lines[3] = `chars count=${charList.length}`;
         lines = lines.concat(charList);
 
-        Fs.writeFileSync(targetPath, lines.join('\n'));
+        _writeAndHandleFile(lines.join('\n'), absPath, needRefreshUrls);
     } catch (err) {
         // do nothing if error occurred
     }
 
     if (!customFnt) {
         // not custom fnt file, copy to the target path
-        Fs.copySync(absPath, targetPath);
+        _handleFile(absPath, needRefreshUrls);
     }
 }
 
-function _copyResources(srcPath, dstPath, resRoot) {
+function _writeAndHandleFile(content, srcPath, needRefreshUrls) {
+    var tempFilesPath = Path.join(Editor.remote.projectPath, TempFolderName, projectName + TEMP_FILES_SUFFIX);
+    var targetPath = Path.join(tempFilesPath, Path.basename(srcPath));
+    if (Fs.existsSync(targetPath)) {
+        Fs.unlinkSync(targetPath);
+    }
+
+    Fs.ensureDirSync(tempFilesPath);
+    Fs.writeFileSync(targetPath, content);
+
+    var relativePath = Path.relative(resourcePath, srcPath);
+    _handleFile(targetPath, needRefreshUrls, relativePath);
+}
+
+function _copyResources(srcPath, needRefreshUrls) {
     Fs.readdirSync(srcPath).forEach(function (file) {
         var absPath = Path.join(srcPath, file);
-        var targetPath = Path.join(dstPath, file);
+        var relativePath = Path.relative(resourcePath, absPath);
         if(Fs.lstatSync(absPath).isDirectory()) {
             // recurse
-            _copyResources(absPath, targetPath, resRoot);
+            _copyResources(absPath, needRefreshUrls);
         } else {
             var ext = Path.extname(absPath);
             if (ext === '.exml') {
                 exmlFiles.push(absPath);
             } else if (ext === '.json'){
-                _handleJsonFile(absPath, targetPath);
+                _handleJsonFile(absPath, needRefreshUrls);
             } else if (ext === '.fnt') {
-                _handleFntFile(absPath, targetPath);
+                _handleFntFile(absPath, needRefreshUrls);
             } else {
-                Fs.ensureDirSync(dstPath);
-                Fs.copySync(absPath, targetPath);
+                _handleFile(absPath, needRefreshUrls);
             }
         }
     });
+}
+
+function _handleFile(filePath, needRefreshUrls, relativePath) {
+    var resPath = Editor.assetdb.remote._fspath(newResourceUrl);
+    var copy2Temp = false;
+    var needRefresh = false;
+    if (!relativePath) {
+        relativePath = Path.relative(resourcePath, filePath);
+    }
+
+    if (Fs.existsSync(resPath)) {
+        var checkPath = Path.join(resPath, relativePath);
+        if (!Fs.existsSync(checkPath)) {
+            copy2Temp = true;
+        } else {
+            if (!_isSame(checkPath, filePath)) {
+                needRefresh = true;
+            }
+        }
+    } else {
+        copy2Temp = true;
+    }
+
+    if (copy2Temp) {
+        var dstPath = Path.join(tempResPath, relativePath);
+        Fs.ensureDirSync(Path.dirname(dstPath));
+        Fs.copySync(filePath, dstPath);
+    }
+    else if (needRefresh) {
+        // Warning not copy the file to the assets folder
+
+        //Fs.copySync(filePath, checkPath);
+        //needRefreshUrls.push(Editor.assetdb.remote._url(checkPath));
+    }
+}
+
+function _isSame(file1, file2) {
+    var md51 = MD5(Fs.readFileSync(file1));
+    var md52 = MD5(Fs.readFileSync(file2));
+    return md51 === md52;
 }
 
 // import animation files
@@ -330,33 +442,56 @@ function _importAnimFiles(cb) {
         return;
     }
 
-    var animUrls = {};
     Async.waterfall([
         function(next) {
-            // generate the anim files for Creator
-            for (var idx in animFiles) {
-                var animFile = animFiles[idx];
-                animUrls[animFile] = _genAnimFile(animFile);
+            // create the folders for the animation files
+            for (var i = 0, n = animFiles.length; i < n; i++) {
+                var relativeDir = Path.relative(resourcePath, Path.dirname(animFiles[i]));
+                var checkPath = Path.join(tempPrefabPath, relativeDir);
+                Fs.ensureDirSync(checkPath);
             }
 
-            // import anim files
+            // import the temp prefab path
             Editor.assetdb.import([tempPrefabPath], AssetsRootUrl, false, function(err, results) {
-                _removeTempPrefabPath();
                 next();
             });
         },
         function(next) {
-            // generate prefab to use the animation Clip
-            for (var idx in animFiles) {
-                var animFile = animFiles[idx];
-                _genAnimPrefab(animFile, animUrls[animFile]);
-            }
+            _asynHandleList(animFiles, function(animFile, cb) {
+                // generate the anim files for Creator
+                var usingAnimUrls = _genAnimFile(animFile);
+                if (!usingAnimUrls || usingAnimUrls.length === 0) {
+                    return cb();
+                }
 
-            // import prefab files
-            Editor.assetdb.import([tempPrefabPath], AssetsRootUrl, false, function(err, results) {
-                _removeTempPrefabPath();
-                next();
-            });
+                // get the paths for importing
+                var name = Path.basename(animFile, Path.extname(animFile));
+                var relativeDir = Path.relative(resourcePath, Path.dirname(animFile));
+                var animFolderPath = Path.join(tempPrefabPath, relativeDir, name + ACTION_FOLDER_SUFFIX);
+                var targetUrl = Url.join(newPrefabUrl, relativeDir);
+
+                Async.waterfall([
+                    next => {
+                        Editor.assetdb.import([animFolderPath], targetUrl, false, function(err, results) {
+                            next();
+                        });
+                    },
+                    next => {
+                        // generate prefab to use the animation Clip
+                        var prefabPath = _genAnimPrefab(animFile, usingAnimUrls);
+                        if (!prefabPath) {
+                            return next();
+                        }
+
+                        Editor.assetdb.import([prefabPath], targetUrl, false, function(err, results) {
+                            next();
+                        });
+                    }
+                ], function() {
+                    cb();
+                });
+
+            }, next);
         }
     ], function(err) {
         if (cb) {
@@ -365,11 +500,26 @@ function _importAnimFiles(cb) {
     });
 }
 
-function _genPlistForAnim(animFile) {
+function _asynHandleList(list, handler, cb) {
+    var index = 0;
+    Async.whilst(
+        function() {
+            return index < list.length;
+        },
+        function(callback) {
+            handler(list[index], function() {
+                index++;
+                callback();
+            });
+        },
+        function() {
+            cb();
+        }
+    );
+}
+
+function _genPlistForAnim(animFile, needRefreshUrls) {
     var name = Path.basename(animFile, Path.extname(animFile));
-    var relativeDir = Path.relative(resourcePath, Path.dirname(animFile));
-    var newResPath = Editor.assetdb.remote.urlToFspath(newResourceUrl);
-    var plistPath = Path.join(newResPath, relativeDir, name + '.plist');
     var pngName = name + '.png';
 
     var animCfg = JSON.parse(Fs.readFileSync(animFile, 'utf8'));
@@ -405,9 +555,9 @@ function _genPlistForAnim(animFile) {
 
     plistObj.metadata.size = `{${imgWidth},${imgHeight}}`;
 
-    Fs.ensureDirSync(Path.dirname(plistPath));
     var plistContent = Plist.build(plistObj);
-    Fs.writeFileSync(plistPath, plistContent);
+    var srcPath = Path.join(Path.dirname(animFile), name + '.plist');
+    _writeAndHandleFile(plistContent, srcPath, needRefreshUrls);
 }
 
 function _genAnimFile(animFile) {
@@ -481,7 +631,7 @@ function _genAnimFile(animFile) {
 
 function _genAnimPrefab(animFile, animUrls) {
     if (!animUrls || animUrls.length === 0) {
-        return;
+        return null;
     }
 
     // create prefab to use the animation clips
@@ -522,6 +672,8 @@ function _genAnimPrefab(animFile, animUrls) {
     var prefab = _Scene.PrefabUtils.createPrefabFrom(node);
     var prefabData = Editor.serialize(prefab);
     Fs.writeFileSync(prefabPath, prefabData);
+
+    return prefabPath;
 }
 
 module.exports = {
