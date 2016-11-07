@@ -165,8 +165,9 @@ function _setScale9Properties(scale9Grid, uuid, cb) {
         }
 
         var jsonString = JSON.stringify(meta);
-        Editor.assetdb.saveMeta( uuid, jsonString );
-        cb();
+        Editor.assetdb.saveMeta( uuid, jsonString, function () {
+            cb();
+        });
     });
 }
 
