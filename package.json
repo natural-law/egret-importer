@@ -2,7 +2,7 @@
   "name": "egret-importer",
   "version": "0.1.0",
   "description": "Egret Project Importer",
-  "author": "rainbowmhk@qq.com",
+  "author": "lengaoxin@gmail.com",
   "packages": {
     "project-importer": "^0.1.0"
   },
