@@ -35,6 +35,9 @@ const JSON_CHECKERS = {
     },
     'anim_cfg' : function (jsonObj) {
         return (jsonObj.mc && jsonObj.res);
+    },
+    'plist_cfg' : function (jsonObj) {
+        return (jsonObj.file && jsonObj.frames);
     }
 };
 
@@ -298,6 +301,12 @@ function _handleJsonFile(absPath, needRefreshUrls) {
     }
 
     if (jsonType) {
+        if (jsonType === 'plist_cfg') {
+            // is a plist format file, convert to plist
+            _handlePlistFile(absPath, needRefreshUrls);
+            return;
+        }
+
         if (! jsonFiles[jsonType]) {
             jsonFiles[jsonType] = [];
         }
@@ -306,6 +315,47 @@ function _handleJsonFile(absPath, needRefreshUrls) {
         // copy to the target path
         _handleFile(absPath, needRefreshUrls);
     }
+}
+
+function _handlePlistFile(absPath, needRefreshUrls) {
+    var fileContent = Fs.readFileSync(absPath, 'utf8');
+    var fileObj = JSON.parse(fileContent);
+    var plistObj = {
+        metadata : {
+            format: 2,
+            realTextureFileName: fileObj.file,
+            textureFileName: fileObj.file
+        },
+        frames : {
+
+        }
+    };
+
+    var imgWidth = 0, imgHeight = 0;
+    for (var frameKey in fileObj.frames) {
+        if (! fileObj.frames.hasOwnProperty(frameKey)) {
+            continue;
+        }
+
+        var frameCfg = fileObj.frames[frameKey];
+        plistObj.frames[frameKey] = {
+            frame: `{{${frameCfg.x},${frameCfg.y}},{${frameCfg.w},${frameCfg.h}}}`,
+            offset : `{{${frameCfg.offX},${frameCfg.offY}}}`,
+            rotated: false,
+            sourceColorRect: `{{0,0},{${frameCfg.w},${frameCfg.h}}}`,
+            sourceSize: `{${frameCfg.sourceW},${frameCfg.sourceH}}`
+        };
+
+        imgWidth = Math.max(imgWidth, frameCfg.x + frameCfg.w);
+        imgHeight = Math.max(imgHeight, frameCfg.y + frameCfg.h);
+    }
+
+    plistObj.metadata.size = `{${imgWidth},${imgHeight}}`;
+
+    var plistContent = Plist.build(plistObj);
+    var name = Path.basename(absPath, Path.extname(absPath));
+    var srcPath = Path.join(Path.dirname(absPath), name + '.plist');
+    _writeAndHandleFile(plistContent, srcPath, needRefreshUrls);
 }
 
 function _handleFntFile(absPath, needRefreshUrls) {
