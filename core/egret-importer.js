@@ -43,6 +43,7 @@ const JSON_CHECKERS = {
 
 function importProject(projPath, cb) {
     Editor.log('Importing Egret project : %s', projPath);
+    _trackEvent('Import begin');
     projectPath = projPath;
     projectName = Path.basename(projPath);
     resourcePath = Path.join(projectPath, ResFolderName);
@@ -215,6 +216,11 @@ function importProject(projPath, cb) {
         //_removeTempResPath();
 
         cb(new Error('Import resource files failed.'));
+        if (err) {
+            _trackEvent('Import failed');
+        } else {
+            _trackEvent('Import success');
+        }
     }
 }
 
@@ -724,6 +730,14 @@ function _genAnimPrefab(animFile, animUrls) {
     Fs.writeFileSync(prefabPath, prefabData);
 
     return prefabPath;
+}
+
+function _trackEvent(action) {
+    Editor.Ipc.sendToMain('metrics:track-event', {
+        category: 'Packages',
+        label: 'egret-importer',
+        action: action
+    });
 }
 
 module.exports = {
